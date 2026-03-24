@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Block Analysis - Sherlock</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		
+		body {
+			font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+			background: #0d1117;
+			color: #c9d1d9;
+		}
+
+		.header {
+			background: #161b22;
+			border-bottom: 1px solid #30363d;
+			padding: 20px 0;
+		}
+
+		.container {
+			max-width: 1400px;
+			margin: 0 auto;
+			padding: 0 20px;
+		}
+
+		h1, h2, h3 { color: #58a6ff; }
+		h1 { font-size: 1.8em; }
+		h2 { font-size: 1.3em; margin-top: 30px; margin-bottom: 15px; }
+
+		.breadcrumb {
+			color: #8b949e;
+			margin-bottom: 20px;
+		}
+
+		.breadcrumb a {
+			color: #58a6ff;
+			text-decoration: none;
+		}
+
+		.breadcrumb a:hover {
+			text-decoration: underline;
+		}
+
+		.content {
+			padding: 30px 0;
+		}
+
+		.stats-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+			gap: 15px;
+			margin-bottom: 30px;
+		}
+
+		.stat-box {
+			background: #161b22;
+			border: 1px solid #30363d;
+			padding: 15px;
+			border-radius: 6px;
+		}
+
+		.stat-box .label {
+			color: #8b949e;
+			font-size: 0.9em;
+		}
+
+		.stat-box .value {
+			color: #58a6ff;
+			font-size: 1.4em;
+			font-weight: bold;
+			margin-top: 5px;
+		}
+
+		table {
+			width: 100%;
+			border-collapse: collapse;
+			margin: 20px 0;
+			background: #161b22;
+		}
+
+		th, td {
+			padding: 12px;
+			text-align: left;
+			border-bottom: 1px solid #30363d;
+		}
+
+		th {
+			background: #0d1117;
+			font-weight: 600;
+			color: #58a6ff;
+		}
+
+		tr:hover {
+			background: #0d1117;
+		}
+
+		.tx-row {
+			cursor: pointer;
+		}
+
+		.tx-details {
+			display: none;
+			background: #0d1117;
+			padding: 15px;
+			margin-top: -1px;
+		}
+
+		.tx-details.show {
+			display: block;
+		}
+
+		.heuristic-badge {
+			display: inline-block;
+			padding: 3px 8px;
+			border-radius: 3px;
+			font-size: 0.85em;
+			margin-right: 5px;
+			margin-bottom: 5px;
+		}
+
+		.heuristic-badge.detected {
+			background: #3fb950;
+			color: #fff;
+		}
+
+		.heuristic-badge.not-detected {
+			background: #444c56;
+			color: #c9d1d9;
+		}
+
+		.chart-container {
+			background: #161b22;
+			border: 1px solid #30363d;
+			border-radius: 6px;
+			padding: 20px;
+			margin: 20px 0;
+		}
+
+		.error {
+			background: #da3633;
+			color: #fff;
+			padding: 15px;
+			border-radius: 6px;
+			margin-bottom: 20px;
+		}
+
+		.loading {
+			text-align: center;
+			padding: 40px;
+			color: #8b949e;
+		}
+
+		.fee-rate-chart {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+			gap: 15px;
+		}
+
+		.script-dist {
+			display: flex;
+			flex-direction: column;
+			gap: 10px;
+		}
+
+		.script-dist-item {
+			display: flex;
+			justify-content: space-between;
+			padding: 8px 0;
+			border-bottom: 1px solid #30363d;
+		}
+	</style>
+</head>
+<body>
+	<div class="header">
+		<div class="container">
+			<h1>Block Analysis</h1>
+			<div class="breadcrumb">
+				<a href="/">⚡ Sherlock</a> / <span id="blockName">Block</span>
+			</div>
+		</div>
+	</div>
+
+	<div class="container content">
+		<div id="error" style="display:none;" class="error"></div>
+		<div id="loading" class="loading">Loading block analysis...</div>
+
+		<div id="data" style="display:none;">
+			<h2>Summary Statistics</h2>
+			<div class="stats-grid" id="summary"></div>
+
+			<h2>Fee Rate Statistics</h2>
+			<div class="chart-container fee-rate-chart" id="feeStats"></div>
+
+			<h2>Script Type Distribution</h2>
+			<div class="chart-container">
+				<div class="script-dist" id="scriptDist"></div>
+			</div>
+
+			<h2>Transactions</h2>
+			<table>
+				<thead>
+					<tr>
+						<th>TXID</th>
+						<th>Inputs/Outputs</th>
+						<th>Classification</th>
+						<th>Heuristics</th>
+					</tr>
+				</thead>
+				<tbody id="txTable"></tbody>
+			</table>
+		</div>
+	</div>
+
+	<script>
+		const params = new URLSearchParams(window.location.search);
+		const blockName = params.get('block');
+
+		if (!blockName) {
+			document.getElementById('error').textContent = 'No block specified';
+			document.getElementById('error').style.display = 'block';
+		} else {
+			document.getElementById('blockName').textContent = blockName;
+			loadBlockData();
+		}
+
+		async function loadBlockData() {
+			const error = document.getElementById('error');
+			const loading = document.getElementById('loading');
+			const data = document.getElementById('data');
+
+			try {
+				const res = await fetch(`/api/block/${blockName}`);
+				if (!res.ok) throw new Error('Failed to load block data');
+
+				const blockData = await res.json();
+
+				// Render summary
+				const summaryDiv = document.getElementById('summary');
+				let summaryHtml = '';
+
+				const summary = blockData.analysis_summary;
+				summaryHtml += `
+					<div class="stat-box">
+						<div class="label">Total Transactions</div>
+						<div class="value">${summary.total_transactions_analyzed}</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Flagged Transactions</div>
+						<div class="value">${summary.flagged_transactions}</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Detection Rate</div>
+						<div class="value">${((summary.flagged_transactions/summary.total_transactions_analyzed)*100).toFixed(1)}%</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Heuristics Applied</div>
+						<div class="value">${summary.heuristics_applied.length}</div>
+					</div>
+				`;
+				summaryDiv.innerHTML = summaryHtml;
+
+				// Render fee stats
+				const feeStatsDiv = document.getElementById('feeStats');
+				let feeHtml = '';
+				const feeStats = summary.fee_rate_stats;
+				feeHtml += `
+					<div class="stat-box">
+						<div class="label">Min</div>
+						<div class="value">${feeStats.min_sat_vb.toFixed(2)}</div>
+						<div style="font-size:0.8em; color:#8b949e;">sat/vB</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Median</div>
+						<div class="value">${feeStats.median_sat_vb.toFixed(2)}</div>
+						<div style="font-size:0.8em; color:#8b949e;">sat/vB</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Max</div>
+						<div class="value">${feeStats.max_sat_vb.toFixed(2)}</div>
+						<div style="font-size:0.8em; color:#8b949e;">sat/vB</div>
+					</div>
+					<div class="stat-box">
+						<div class="label">Mean</div>
+						<div class="value">${feeStats.mean_sat_vb.toFixed(2)}</div>
+						<div style="font-size:0.8em; color:#8b949e;">sat/vB</div>
+					</div>
+				`;
+				feeStatsDiv.innerHTML = feeHtml;
+
+				// Render script distribution
+				const scriptDistDiv = document.getElementById('scriptDist');
+				let scriptHtml = '';
+				const scriptDist = summary.script_type_distribution;
+				const sortedTypes = Object.keys(scriptDist).sort((a, b) => scriptDist[b] - scriptDist[a]);
+				for (const type of sortedTypes) {
+					const count = scriptDist[type];
+					const ratio = count / summary.total_transactions_analyzed;
+					scriptHtml += `
+						<div class="script-dist-item">
+							<span>${type}</span>
+							<span>${count} (${(ratio*100).toFixed(1)}%)</span>
+						</div>
+					`;
+				}
+				scriptDistDiv.innerHTML = scriptHtml;
+
+				// Render transactions
+				const txTable = document.getElementById('txTable');
+				let txHtml = '';
+				if (blockData.blocks && blockData.blocks.length > 0) {
+					const blockTxs = blockData.blocks[0].transactions || [];
+					for (const tx of blockTxs) {
+						const detected = Object.keys(tx.heuristics).filter(h => {
+							const result = tx.heuristics[h];
+							return result && result.detected;
+						});
+
+						txHtml += `
+							<tr class="tx-row" onclick="toggleDetails(this)">
+								<td><code>${tx.txid.substring(0, 16)}...</code></td>
+								<td>${tx.inputs.length}/${tx.outputs.length}</td>
+								<td><span style="color:#3fb950;">${tx.classification}</span></td>
+								<td>${detected.length > 0 ? '🔍 ' + detected.length + ' detected' : 'None'}</td>
+							</tr>
+							<tr class="tx-details">
+								<td colspan="4">
+									<strong>Heuristics:</strong><br>
+									${renderHeuristics(tx.heuristics)}
+								</td>
+							</tr>
+						`;
+					}
+				}
+				txTable.innerHTML = txHtml;
+
+				loading.style.display = 'none';
+				data.style.display = 'block';
+			} catch (e) {
+				error.textContent = `Error loading block: ${e.message}`;
+				error.style.display = 'block';
+				loading.style.display = 'none';
+			}
+		}
+
+		function renderHeuristics(heuristics) {
+			let html = '';
+			for (const [h, result] of Object.entries(heuristics)) {
+				const detected = result.detected;
+				const badgeClass = detected ? 'detected' : 'not-detected';
+				const status = detected ? '✓' : '✗';
+				html += `<span class="heuristic-badge ${badgeClass}">${status} ${h}</span>`;
+			}
+			return html;
+		}
+
+		function toggleDetails(row) {
+			const details = row.nextElementSibling;
+			if (details && details.classList.contains('tx-details')) {
+				details.classList.toggle('show');
+			}
+		}
+	</script>
+</body>
+</html>

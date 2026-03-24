@@ -1,0 +1,11 @@
+out/
+fixtures/*.dat
+node_modules/
+__pycache__/
+target/
+.env
+bin/
+*.sum
+*.swp
+*.swo
+.DS_Store

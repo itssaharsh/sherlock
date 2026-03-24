@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Sherlock - Bitcoin Chain Analysis</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+		
+		body {
+			font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+			background: #0d1117;
+			color: #c9d1d9;
+		}
+
+		.header {
+			background: #161b22;
+			border-bottom: 1px solid #30363d;
+			padding: 30px 0;
+			box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+		}
+
+		.container {
+			max-width: 1200px;
+			margin: 0 auto;
+			padding: 0 20px;
+		}
+
+		h1 {
+			color: #58a6ff;
+			font-size: 2em;
+			margin-bottom: 5px;
+		}
+
+		p {
+			color: #8b949e;
+		}
+
+		.content {
+			padding: 40px 0;
+		}
+
+		.blocks-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+			gap: 20px;
+			margin-top: 30px;
+		}
+
+		.block-card {
+			background: #161b22;
+			border: 1px solid #30363d;
+			border-radius: 8px;
+			padding: 20px;
+			cursor: pointer;
+			transition: all 0.2s;
+		}
+
+		.block-card:hover {
+			background: #0d1117;
+			border-color: #58a6ff;
+			box-shadow: 0 0 15px rgba(88, 166, 255, 0.2);
+		}
+
+		.block-card h3 {
+			color: #58a6ff;
+			margin-bottom: 10px;
+		}
+
+		.block-card .stat {
+			display: flex;
+			justify-content: space-between;
+			padding: 5px 0;
+			border-bottom: 1px solid #21262d;
+		}
+
+		.block-card .stat:last-child {
+			border-bottom: none;
+		}
+
+		.loading {
+			text-align: center;
+			padding: 40px;
+			color: #8b949e;
+		}
+
+		.error {
+			background: #da3633;
+			color: #fff;
+			padding: 15px;
+			border-radius: 6px;
+			margin-bottom: 20px;
+		}
+
+		.stats-overview {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+			gap: 20px;
+			margin-bottom: 30px;
+		}
+
+		.stat-box {
+			background: #161b22;
+			border: 1px solid #30363d;
+			padding: 20px;
+			border-radius: 6px;
+		}
+
+		.stat-box .label {
+			color: #8b949e;
+			font-size: 0.9em;
+			margin-bottom: 5px;
+		}
+
+		.stat-box .value {
+			color: #58a6ff;
+			font-size: 1.8em;
+			font-weight: bold;
+		}
+	</style>
+</head>
+<body>
+	<div class="header">
+		<div class="container">
+			<h1>⚡ Sherlock</h1>
+			<p>Bitcoin Chain Analysis Engine</p>
+		</div>
+	</div>
+
+	<div class="container content">
+		<h2>Available Blocks</h2>
+		
+		<div class="stats-overview" id="overview"></div>
+
+		<div id="error" style="display:none;" class="error"></div>
+		<div id="blocks" class="blocks-grid"></div>
+		<div id="loading" class="loading">Loading block analysis results...</div>
+	</div>
+
+	<script>
+		async function loadBlocks() {
+			const loading = document.getElementById('loading');
+			const container = document.getElementById('blocks');
+			const error = document.getElementById('error');
+
+			try {
+				const res = await fetch('/api/blocks');
+				if (!res.ok) throw new Error('Failed to load blocks');
+				
+				const data = await res.json();
+				
+				if (!data.blocks || data.blocks.length === 0) {
+					container.innerHTML = '<p>No block analysis results available yet. Run the CLI to generate analysis.</p>';
+					loading.style.display = 'none';
+					return;
+				}
+
+				// Load detailed data for each block
+				const blockPromises = data.blocks.map(blockName => 
+					fetch(`/api/block/${blockName}`)
+						.then(r => r.json())
+						.catch(e => null)
+				);
+
+				const results = await Promise.all(blockPromises);
+				
+				if (results.length > 0) {
+					// Calculate overview stats
+					let totalTxs = 0;
+					let totalFlagged = 0;
+					const overviewDiv = document.getElementById('overview');
+					let overviewHtml = '';
+
+					results.forEach(result => {
+						if (result && result.analysis_summary) {
+							totalTxs += result.analysis_summary.total_transactions_analyzed;
+							totalFlagged += result.analysis_summary.flagged_transactions;
+						}
+					});
+
+					overviewHtml += `
+						<div class="stat-box">
+							<div class="label">Total Transactions</div>
+							<div class="value">${totalTxs}</div>
+						</div>
+						<div class="stat-box">
+							<div class="label">Flagged Transactions</div>
+							<div class="value">${totalFlagged}</div>
+						</div>
+						<div class="stat-box">
+							<div class="label">Detection Rate</div>
+							<div class="value">${totalTxs > 0 ? ((totalFlagged/totalTxs)*100).toFixed(1) : 0}%</div>
+						</div>
+					`;
+
+					overviewDiv.innerHTML = overviewHtml;
+				}
+
+				// Render block cards
+				let html = '';
+				data.blocks.forEach((blockName, idx) => {
+					const result = results[idx];
+					if (!result) return;
+
+					const summary = result.analysis_summary || {};
+					html += `
+						<div class="block-card" onclick="window.location.href='/block.html?block=${blockName}'">
+							<h3>${blockName}</h3>
+							<div class="stat">
+								<span>Transactions:</span>
+								<span>${summary.total_transactions_analyzed || 0}</span>
+							</div>
+							<div class="stat">
+								<span>Flagged:</span>
+								<span>${summary.flagged_transactions || 0}</span>
+							</div>
+							<div class="stat">
+								<span>Blocks:</span>
+								<span>${result.block_count || 0}</span>
+							</div>
+							<div class="stat">
+								<span>Script Types:</span>
+								<span>${Object.keys(summary.script_type_distribution || {}).length}</span>
+							</div>
+						</div>
+					`;
+				});
+
+				container.innerHTML = html;
+				loading.style.display = 'none';
+			} catch (e) {
+				error.textContent = `Error loading blocks: ${e.message}`;
+				error.style.display = 'block';
+				loading.style.display = 'none';
+				container.innerHTML = '';
+			}
+		}
+
+		loadBlocks();
+	</script>
+</body>
+</html>
